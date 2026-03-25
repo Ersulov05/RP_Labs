@@ -72,7 +72,7 @@ public class IndexModel : PageModel
 
     private int CheckSimilarity(string text)
     {
-        var server = _redisDb.Multiplexer.GetServer("localhost", 6379);
+        var server = _redisDb.Multiplexer.GetServer("redis", 6379);
         var keys = server.Keys(pattern: "TEXT-*");
         
         foreach (var key in keys)
