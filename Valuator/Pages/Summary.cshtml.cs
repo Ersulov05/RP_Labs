@@ -22,7 +22,7 @@ public class SummaryModel : PageModel
     }
 
     public string Text { get; set; }
-    public double Rank { get; set; }
+    public string Rank { get; set; }
     public double Similarity { get; set; }
 
     public void OnGet(string id)
@@ -43,10 +43,10 @@ public class SummaryModel : PageModel
             if (textValue.HasValue)
                 Text = textValue.ToString();
             
-            if (rankValue.HasValue && double.TryParse(rankValue, out double rank))
-                Rank = rank;
+            if (rankValue.HasValue)
+                Rank = rankValue.ToString();
             else
-                Rank = 0;
+                Rank = "not value";
             
             if (similarityValue.HasValue && double.TryParse(similarityValue, out double similarity))
                 Similarity = similarity;

@@ -3,7 +3,7 @@ services:
     image: redis:7-alpine
     container_name: redis-server
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -18,8 +18,11 @@ services:
     environment:
       - INSTANCE_ID=app1
       - REDIS_CONNECTION=redis:6379
+      - RABBITMQ_HOST=rabbitmq-pa3
+      - ASPNETCORE_ENVIRONMENT=Development
     depends_on:
       - redis
+      - rabbitmq-pa3
 
   app2:
     build: ./Valuator
@@ -31,8 +34,11 @@ services:
     environment:
       - INSTANCE_ID=app2
       - REDIS_CONNECTION=redis:6379
+      - RABBITMQ_HOST=rabbitmq-pa3
+      - ASPNETCORE_ENVIRONMENT=Development
     depends_on:
       - redis
+      - rabbitmq-pa3
 
   nginx:
     image: nginx:alpine
@@ -46,6 +52,31 @@ services:
       - app1
       - app2
 
+  rabbitmq-pa3:
+    image: rabbitmq:3.13.7-management  
+    container_name: rabbitmq-pa3
+    hostname: rabbitmq-pa3
+    volumes:
+      - rabbitmq_pa3_data:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+
+  rank-calculator-1:
+    build: ./RankCalculator
+    container_name: rank-calculator-1
+    environment:
+      - REDIS_CONNECTION=redis:6379
+      - RABBITMQ_HOST=rabbitmq-pa3
+    depends_on:
+      - redis
+      - rabbitmq-pa3
+    restart: unless-stopped
+
 volumes:
+  rabbitmq_pa3_data:
   redis-data:
   dpkeys:

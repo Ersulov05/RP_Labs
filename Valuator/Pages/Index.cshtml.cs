@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-
+using RabbitMQ.Client;
 using StackExchange.Redis;
+
+using System.Text;
+using System.Text.Json;
 
 namespace Valuator.Pages;
 
@@ -9,18 +12,22 @@ public class IndexModel : PageModel
 {
     private readonly ILogger<IndexModel> _logger;
     private readonly IDatabase _redisDb;
+    private readonly IConnection _rabbitConnection;
+    private const string ExchangeName = "valuator.processing.rank";
+    private const string QueueName = "valuator.processing.rank";
 
-    public IndexModel(ILogger<IndexModel> logger, IConnectionMultiplexer redis)
+    public IndexModel(ILogger<IndexModel> logger, IConnectionMultiplexer redis, IConnection rabbitConnection)
     {
         _logger = logger;
         _redisDb = redis.GetDatabase();
+        _rabbitConnection = rabbitConnection;
     }
 
     public void OnGet()
     {
     }
 
-    public IActionResult OnPost(string text)
+    public async Task<IActionResult> OnPost(string text)
     {
         try
         {
@@ -32,19 +39,19 @@ public class IndexModel : PageModel
                 return RedirectToPage();
             }
 
-            string similarityKey = "SIMILARITY-" + id;
             // TODO: (pa1) посчитать similarity и сохранить в БД (Redis) по ключу similarityKey
+            string similarityKey = "SIMILARITY-" + id;
             int similarity = CheckSimilarity(text);
             _redisDb.StringSet(similarityKey, similarity.ToString());
 
-            string textKey = "TEXT-" + id;
             // TODO: (pa1) сохранить в БД (Redis) text по ключу textKey
+            string textKey = "TEXT-" + id;
             _redisDb.StringSet(textKey, text);
 
-            string rankKey = "RANK-" + id;
             // TODO: (pa1) посчитать rank и сохранить в БД (Redis) по ключу rankKey
-            double rank = CalculateRank(text);
-            _redisDb.StringSet(rankKey, rank.ToString());        
+            string rankKey = "RANK-" + id;
+            _redisDb.StringSet(rankKey, "processing");
+            await SendRankCalculationTask(id, text);      
 
             return Redirect($"summary?id={id}");
         }
@@ -54,20 +61,45 @@ public class IndexModel : PageModel
         } 
     }
 
-    private double CalculateRank(string text)
+    private async Task SendRankCalculationTask(string id, string text)
     {
-        int totalChars = text.Length;
-        int nonAlphabeticChars = 0;
-
-        foreach (char c in text)
-        {
-            if (!char.IsLetter(c))
-                nonAlphabeticChars++;
-        }
+        using var channel = await _rabbitConnection.CreateChannelAsync();
         
-        return totalChars > 0 
-            ? (double)nonAlphabeticChars / totalChars 
-            : 0;
+        await DeclareTopologyAsync(channel);
+        var taskMessage = new RankTaskMessage
+        {
+            Id = id,
+            Text = text
+        };
+        
+        var messageBody = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(taskMessage));
+        
+        await channel.BasicPublishAsync(
+            exchange: ExchangeName,
+            routingKey: "",
+            mandatory: false,
+            body: messageBody);
+    }
+
+    private static async Task DeclareTopologyAsync(IChannel channel)
+    {
+        // Объявляем exchange типа Direct
+        await channel.ExchangeDeclareAsync(
+            exchange: ExchangeName,
+            type: ExchangeType.Direct,
+            durable: true);
+        
+        await channel.QueueDeclareAsync(
+            queue: QueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false);
+        
+        // Привязываем очередь к exchange
+        await channel.QueueBindAsync(
+            queue: QueueName,
+            exchange: ExchangeName,
+            routingKey: "");
     }
 
     private int CheckSimilarity(string text)
@@ -85,4 +117,10 @@ public class IndexModel : PageModel
         
         return 0;
     }
+}
+
+public class RankTaskMessage
+{
+    public string Id { get; set; }
+    public string Text { get; set; }
 }

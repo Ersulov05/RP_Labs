@@ -1,12 +1,12 @@
 using StackExchange.Redis;
-
+using RabbitMQ.Client;  
 using Microsoft.AspNetCore.DataProtection;
 
 namespace Valuator;
 
 public class Program
 {
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
 
@@ -21,6 +21,14 @@ public class Program
         builder.Services.AddSingleton<IConnectionMultiplexer>(sp => 
             ConnectionMultiplexer.Connect("redis:6379"));
 
+        var factory = new ConnectionFactory
+        {
+            HostName = Environment.GetEnvironmentVariable("RABBITMQ_HOST") ?? "rabbitmq-pa3",
+            UserName = "guest",
+            Password = "guest"
+        };
+        var connection = await factory.CreateConnectionAsync();
+        builder.Services.AddSingleton<IConnection>(connection);
 
         var app = builder.Build();
 
