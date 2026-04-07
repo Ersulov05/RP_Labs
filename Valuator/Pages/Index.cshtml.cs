@@ -66,19 +66,14 @@ public class IndexModel : PageModel
         using var channel = await _rabbitConnection.CreateChannelAsync();
         
         await DeclareTopologyAsync(channel);
-        var taskMessage = new RankTaskMessage
-        {
-            Id = id,
-            Text = text
-        };
         
-        var messageBody = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(taskMessage));
+        byte[] messageData = Encoding.UTF8.GetBytes(id);
         
         await channel.BasicPublishAsync(
             exchange: ExchangeName,
             routingKey: "",
             mandatory: false,
-            body: messageBody);
+            body: messageData);
     }
 
     private static async Task DeclareTopologyAsync(IChannel channel)
@@ -117,10 +112,4 @@ public class IndexModel : PageModel
         
         return 0;
     }
-}
-
-public class RankTaskMessage
-{
-    public string Id { get; set; }
-    public string Text { get; set; }
 }

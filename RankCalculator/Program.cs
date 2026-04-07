@@ -3,66 +3,94 @@ using System.Text.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using StackExchange.Redis;
+using Microsoft.Extensions.Configuration;
 
+// TODO: Вынести конфиги, Обработка в consumer если обрыв redis пустой текст
 namespace RankCalculator;
 
 class Program
 {
     private const string QueueName = "valuator.processing.rank";
-    private static IDatabase _redis;
+    private static IDatabase? _redis;
 
     static async Task Main(string[] args)
     {        
-        try
+        var config = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .Build();
+
+        var redisConnection = config["Redis:ConnectionString"];
+        var rabbitHost = config["RabbitMQ:HostName"];
+        var rabbitUser = config["RabbitMQ:UserName"];
+        var rabbitPassword = config["RabbitMQ:Password"];
+
+        Console.WriteLine("=== Configuration Values ===");
+        Console.WriteLine($"Redis:ConnectionString = '{redisConnection}'");
+        Console.WriteLine($"RabbitMQ:HostName = '{rabbitHost}'");
+        Console.WriteLine($"RabbitMQ:UserName = '{rabbitUser}'");
+        Console.WriteLine($"RabbitMQ:Password = '{rabbitPassword}'");
+
+        _redis = ConnectionMultiplexer.Connect(redisConnection).GetDatabase();
+        ConnectionFactory factory = new ConnectionFactory
         {
-            _redis = ConnectionMultiplexer.Connect("redis:6379").GetDatabase();
+            HostName = rabbitHost,
+            UserName = rabbitUser,
+            Password = rabbitPassword,
+            AutomaticRecoveryEnabled = true
+        };
+
+        await using IConnection connection = await factory.CreateConnectionAsync();
+        await using IChannel channel = await connection.CreateChannelAsync();
+
+        await DeclareTopologyAsync(channel);
+            
+        await RunConsumer(channel);          
+        await Task.Delay(-1);
+    }
+
+    private static async Task RunConsumer(IChannel channel)
+    {
+        AsyncEventingBasicConsumer consumer = new(channel);
+        consumer.ReceivedAsync += (_, eventArgs) => ConsumeAsync(channel, eventArgs);
+        
+        await channel.BasicConsumeAsync(
+            queue: QueueName,
+            autoAck: false,
+            consumer: consumer
+        );
+    }
+
+    private static async Task ConsumeAsync(IChannel channel, BasicDeliverEventArgs eventArgs)
+    {
+        if (_redis == null)
+        {
+            await channel.BasicNackAsync(eventArgs.DeliveryTag, false, true);
+            return;
+        }
+
+        string id = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+        string textKey = "TEXT-" + id;
+        RedisValue redisValue = await _redis.StringGetAsync(textKey);
+        string text = redisValue.ToString() ?? "";
+
+        if (string.IsNullOrEmpty(text))
+        {
+            await channel.BasicAckAsync(eventArgs.DeliveryTag, false);
+            return;
+        }
     
-            var factory = new ConnectionFactory 
-            { 
-                HostName = "rabbitmq-pa3",
-                UserName = "guest",
-                Password = "guest",
-                AutomaticRecoveryEnabled = true
-            };
-            var connection = await factory.CreateConnectionAsync();
-            var channel = await connection.CreateChannelAsync();
-            
-            await channel.QueueDeclareAsync(QueueName, durable: true, exclusive: false, autoDelete: false);
-            await channel.BasicQosAsync(0, 1, false);
-            
-            var consumer = new AsyncEventingBasicConsumer(channel);
-            consumer.ReceivedAsync += async (_, ea) =>
-            {
-                try
-                {
-                    var message = Encoding.UTF8.GetString(ea.Body.ToArray());
-                    Console.WriteLine($"→ Received: {message}");
-                    
-                    var task = JsonSerializer.Deserialize<RankTaskMessage>(message);
-                    
-                    if (task != null && !string.IsNullOrEmpty(task.Id))
-                    {
-                        double rank = CalculateRank(task.Text ?? "");
-                        await _redis.StringSetAsync($"RANK-{task.Id}", rank.ToString());
-                    }
-                    
-                    await channel.BasicAckAsync(ea.DeliveryTag, false);
-                }
-                catch (Exception ex)
-                {
-                    await channel.BasicNackAsync(ea.DeliveryTag, false, false);
-                }
-            };
-            
-            await channel.BasicConsumeAsync(QueueName, autoAck: false, consumer: consumer);            
-            await Task.Delay(-1);
-        }
-        catch (Exception ex)
+        double rank = CalculateRank(text);
+        string rankKey = "RANK-" + id;
+
+        bool saved = await _redis.StringSetAsync(rankKey, rank.ToString());
+        if (!saved)
         {
-            Console.WriteLine($"Fatal error: {ex.Message}");
-            Console.WriteLine(ex.StackTrace);
-            throw;
+            await channel.BasicNackAsync(eventArgs.DeliveryTag, false, true);
+            return;
         }
+
+        await channel.BasicAckAsync(eventArgs.DeliveryTag, false);
     }
     
     static double CalculateRank(string text)
@@ -75,10 +103,14 @@ class Program
         
         return (double)nonAlphabetic / text.Length;
     }
-}
 
-class RankTaskMessage
-{
-    public string? Id { get; set; }
-    public string? Text { get; set; }
+    private static async Task DeclareTopologyAsync(IChannel channel)
+    {
+        await channel.QueueDeclareAsync(
+            queue: QueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false
+        );
+    }
 }
