@@ -15,6 +15,7 @@ public class IndexModel : PageModel
     private readonly IConnection _rabbitConnection;
     private const string ExchangeName = "valuator.processing.rank";
     private const string QueueName = "valuator.processing.rank";
+    private const string EventsExchangeName = "valuator.events";
 
     public IndexModel(ILogger<IndexModel> logger, IConnectionMultiplexer redis, IConnection rabbitConnection)
     {
@@ -43,6 +44,7 @@ public class IndexModel : PageModel
             string similarityKey = "SIMILARITY-" + id;
             int similarity = CheckSimilarity(text);
             _redisDb.StringSet(similarityKey, similarity.ToString());
+            await PublishSimilarityCalculatedEvent(id, similarity);
 
             // TODO: (pa1) сохранить в БД (Redis) text по ключу textKey
             string textKey = "TEXT-" + id;
@@ -59,6 +61,31 @@ public class IndexModel : PageModel
         {
             return RedirectToPage("Error", new { message = ex.Message });
         } 
+    }
+
+    private async Task PublishSimilarityCalculatedEvent(string id, int similarity)
+    {
+        using var channel = await _rabbitConnection.CreateChannelAsync();
+        
+        await channel.ExchangeDeclareAsync(
+            exchange: EventsExchangeName,
+            type: ExchangeType.Topic,
+            durable: true);
+        
+        var eventData = new
+        {
+            EventType = "SimilarityCalculated",
+            EntityId = id,
+            Similarity = similarity,
+        };
+        
+        byte[] messageData = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(eventData));
+        
+        await channel.BasicPublishAsync(
+            exchange: EventsExchangeName,
+            routingKey: "event.similarity.calculated",
+            mandatory: false,
+            body: messageData);
     }
 
     private async Task SendRankCalculationTask(string id, string text)

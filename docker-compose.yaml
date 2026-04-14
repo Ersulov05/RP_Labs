@@ -16,9 +16,6 @@ services:
     ports:
       - "5001:5000"
     environment:
-      - INSTANCE_ID=app1
-      - REDIS_CONNECTION=redis:6379
-      - RABBITMQ_HOST=rabbitmq-pa3
       - ASPNETCORE_ENVIRONMENT=Development
     depends_on:
       - redis
@@ -33,9 +30,6 @@ services:
     ports:
       - "5002:5000"
     environment:
-      - INSTANCE_ID=app2
-      - REDIS_CONNECTION=redis:6379
-      - RABBITMQ_HOST=rabbitmq-pa3
       - ASPNETCORE_ENVIRONMENT=Development
     depends_on:
       - redis
@@ -70,24 +64,32 @@ services:
   rank-calculator-1:
     build: ./RankCalculator
     container_name: rank-calculator-1
-    environment:
-      - REDIS_CONNECTION=redis:6379
-      - RABBITMQ_HOST=rabbitmq-pa3
     depends_on:
       - redis
       - rabbitmq-pa3
     restart: unless-stopped
 
-  # rank-calculator-2:
-  #   build: ./RankCalculator
-  #   container_name: rank-calculator-2
-  #   environment:
-  #     - REDIS_CONNECTION=redis:6379
-  #     - RABBITMQ_HOST=rabbitmq-pa3
-  #   depends_on:
-  #     - redis
-  #     - rabbitmq-pa3
-  #   restart: unless-stopped
+  rank-calculator-2:
+    build: ./RankCalculator
+    container_name: rank-calculator-2
+    depends_on:
+      - redis
+      - rabbitmq-pa3
+    restart: unless-stopped
+
+  eventslogger1:
+    build: ./EventsLogger
+    container_name: eventslogger-1
+    depends_on:
+      - rabbitmq-pa3
+    restart: unless-stopped
+
+  eventslogger2:
+    build: ./EventsLogger
+    container_name: eventslogger-2
+    depends_on:
+      - rabbitmq-pa3
+    restart: unless-stopped
 
 volumes:
   rabbitmq_pa3_data:
