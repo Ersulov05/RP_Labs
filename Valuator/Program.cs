@@ -2,6 +2,8 @@ using StackExchange.Redis;
 using RabbitMQ.Client;  
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
+using Valuator.Hubs;
+using Valuator.Services;
 
 namespace Valuator;
 
@@ -43,6 +45,9 @@ public class Program
         var connection = await factory.CreateConnectionAsync();
         builder.Services.AddSingleton<IConnection>(connection);
 
+        builder.Services.AddSignalR();
+        builder.Services.AddHostedService<RankNotificationService>();
+
         var app = builder.Build();
 
         // Configure the HTTP request pipeline.
@@ -57,6 +62,7 @@ public class Program
         app.UseAuthorization();
 
         app.MapRazorPages();
+        app.MapHub<RankHub>("/rankHub"); 
 
         app.Run();
     }

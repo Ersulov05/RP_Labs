@@ -1,7 +1,51 @@
 ﻿@page
 @model Valuator.Pages.SummaryModel
 @{
+    ViewData["Title"] = "Summary";
 }
+
 <p>Текст: @Model.Text</p>
-<p>Оценка содержания: @Model.Rank</p>
+<p id="rankValue">Оценка содержания: @Model.Rank</p>
 <p>Плагиат: @Model.Similarity</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
+
+<script>
+    const id = '@Model.Id';
+    const rankElement = document.getElementById('rankValue');
+    
+    function updateRankDisplay(rank) {
+        if (rank === 'processing' || rank === 'not value') {
+            rankElement.innerHTML = 'Оценка содержания: Вычисляется...';
+        } else {
+            rankElement.innerHTML = `Оценка содержания: ${rank}`;
+        }
+    }
+    
+    const currentRank = '@Model.Rank';    
+    if (currentRank !== 'processing' && currentRank !== 'not value' && currentRank !== '') {
+        updateRankDisplay(currentRank);
+    } else {
+        updateRankDisplay('processing');
+        
+        const connection = new signalR.HubConnectionBuilder()
+            .withUrl("/rankHub")
+            .withAutomaticReconnect()
+            .build();
+        
+        connection.on("RankReady", (rank) => {
+            updateRankDisplay(rank);
+        });
+        
+        async function startConnection() {
+            try {
+                await connection.start();
+                await connection.invoke("SubscribeToRankUpdates", id);
+            } catch (err) {
+                console.error("SignalR Connection Error:", err);
+            }
+        }
+        
+        startConnection();
+    }
+</script>

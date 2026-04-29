@@ -82,6 +82,10 @@ class Program
 
     private static async Task ConsumeAsync(IChannel channel, BasicDeliverEventArgs eventArgs)
     {
+        TimeSpan interval = TimeSpan.FromSeconds(new Random().Next(3, 15));
+        Console.WriteLine($"Waiting {interval}");
+        await Task.Delay(interval);
+
         if (_redis == null)
         {
             await channel.BasicNackAsync(eventArgs.DeliveryTag, false, true);
