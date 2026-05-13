@@ -1,15 +1,45 @@
 services:
-  redis:
+  redis-main:
     image: redis:7-alpine
-    container_name: redis-server
+    container_name: redis-main
     ports:
       - "6380:6379"
     volumes:
-      - redis-data:/data
+      - redis-main-data:/data
+    command: redis-server --appendonly yes
+
+  redis-ru:
+    image: redis:7-alpine
+    container_name: redis-ru
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-ru-data:/data
+    command: redis-server --appendonly yes
+
+  redis-eu:
+    image: redis:7-alpine
+    container_name: redis-eu
+    ports:
+      - "6382:6379"
+    volumes:
+      - redis-eu-data:/data
+    command: redis-server --appendonly yes
+
+  redis-asia:
+    image: redis:7-alpine
+    container_name: redis-asia
+    ports:
+      - "6383:6379"
+    volumes:
+      - redis-asia-data:/data
     command: redis-server --appendonly yes
 
   app1:
-    build: ./Valuator
+    build:
+      context: .
+      dockerfile: Valuator/Dockerfile
+
     volumes:
       - dpkeys:/keys
     container_name: app-instance-1
@@ -17,13 +47,26 @@ services:
       - "5001:5000"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:5000
+      - DB_MAIN=redis-main:6379
+      - DB_RU=redis-ru:6379
+      - DB_EU=redis-eu:6379
+      - DB_ASIA=redis-asia:6379
+      - RabbitMQ__HostName=rabbitmq-pa3
+      - RabbitMQ__UserName=guest
+      - RabbitMQ__Password=guest
     depends_on:
-      - redis
+      - redis-main
+      - redis-ru
+      - redis-eu
+      - redis-asia
       - rabbitmq-pa3
     restart: unless-stopped
 
   app2:
-    build: ./Valuator
+    build:
+      context: .
+      dockerfile: Valuator/Dockerfile
     volumes:
       - dpkeys:/keys
     container_name: app-instance-2
@@ -31,10 +74,49 @@ services:
       - "5002:5000"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:5000
+      - DB_MAIN=redis-main:6379
+      - DB_RU=redis-ru:6379
+      - DB_EU=redis-eu:6379
+      - DB_ASIA=redis-asia:6379
+      - RabbitMQ__HostName=rabbitmq-pa3
+      - RabbitMQ__UserName=guest
+      - RabbitMQ__Password=guest
     depends_on:
-      - redis
+      - redis-main
+      - redis-ru
+      - redis-eu
+      - redis-asia
       - rabbitmq-pa3
     restart: unless-stopped
+
+  # app1:
+  #   build: ./Valuator
+  #   volumes:
+  #     - dpkeys:/keys
+  #   container_name: app-instance-1
+  #   ports:
+  #     - "5001:5000"
+  #   environment:
+  #     - ASPNETCORE_ENVIRONMENT=Development
+  #   depends_on:
+  #     - redis
+  #     - rabbitmq-pa3
+  #   restart: unless-stopped
+
+  # app2:
+  #   build: ./Valuator
+  #   volumes:
+  #     - dpkeys:/keys
+  #   container_name: app-instance-2
+  #   ports:
+  #     - "5002:5000"
+  #   environment:
+  #     - ASPNETCORE_ENVIRONMENT=Development
+  #   depends_on:
+  #     - redis
+  #     - rabbitmq-pa3
+  #   restart: unless-stopped
 
   nginx:
     image: nginx:alpine
@@ -62,18 +144,44 @@ services:
       - '15672:15672'
 
   rank-calculator-1:
-    build: ./RankCalculator
+    build:
+      context: .
+      dockerfile: RankCalculator/Dockerfile
     container_name: rank-calculator-1
+    environment:
+      - DB_MAIN=redis-main:6379
+      - DB_RU=redis-ru:6379
+      - DB_EU=redis-eu:6379
+      - DB_ASIA=redis-asia:6379
+      - RABBITMQ_HOST=rabbitmq-pa3
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASSWORD=guest
     depends_on:
-      - redis
+      - redis-main
+      - redis-ru
+      - redis-eu
+      - redis-asia
       - rabbitmq-pa3
     restart: unless-stopped
 
   rank-calculator-2:
-    build: ./RankCalculator
+    build:
+      context: .
+      dockerfile: RankCalculator/Dockerfile
     container_name: rank-calculator-2
+    environment:
+      - DB_MAIN=redis-main:6379
+      - DB_RU=redis-ru:6379
+      - DB_EU=redis-eu:6379
+      - DB_ASIA=redis-asia:6379
+      - RABBITMQ_HOST=rabbitmq-pa3
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASSWORD=guest
     depends_on:
-      - redis
+      - redis-main
+      - redis-ru
+      - redis-eu
+      - redis-asia
       - rabbitmq-pa3
     restart: unless-stopped
 
@@ -93,5 +201,8 @@ services:
 
 volumes:
   rabbitmq_pa3_data:
-  redis-data:
+  redis-main-data:
+  redis-ru-data:
+  redis-eu-data:
+  redis-asia-data:
   dpkeys:

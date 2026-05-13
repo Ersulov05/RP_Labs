@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Logging;
+using Shard;
+
 
 using StackExchange.Redis;
 
@@ -12,12 +14,17 @@ namespace Valuator.Pages;
 public class SummaryModel : PageModel
 {
     private readonly ILogger<SummaryModel> _logger;
-    private readonly IDatabase _redisDb;
+    private readonly IDatabase _mainDb;
+    private readonly IShardRedisService _shardedRedis;
 
-    public SummaryModel(ILogger<SummaryModel> logger, IConnectionMultiplexer redis)
+    public SummaryModel(
+        ILogger<SummaryModel> logger, 
+        IConnectionMultiplexer mainRedis, 
+        IShardRedisService shardedRedis)
     {
         _logger = logger;
-        _redisDb = redis.GetDatabase();
+        _mainDb = mainRedis.GetDatabase();
+        _shardedRedis = shardedRedis;
         Text = "";
     }
 
@@ -25,6 +32,7 @@ public class SummaryModel : PageModel
     public string Rank { get; set; }
     public double Similarity { get; set; }
     public string Id { get; set; } 
+    public string Region { get; set; }
 
     public void OnGet(string id)
     {
@@ -34,13 +42,28 @@ public class SummaryModel : PageModel
         // TODO: (pa1) проинициализировать свойства Rank и Similarity значениями из БД (Redis)
         if (!string.IsNullOrEmpty(id))
         {
+            string shardMapKey = $"SHARD-{id}";
+            string region = _mainDb.StringGet(shardMapKey);
+            _logger.LogInformation("Summary LOOKUP: {Id}, {Region}", id, region.ToUpper());
+            
+            if (string.IsNullOrEmpty(region))
+            {
+                Rank = "not found";
+                Region = "not found";
+                Similarity = 0;
+                return;
+            }
+
+            Region = region;
+            var regionDb = _shardedRedis.GetDatabaseForRegion(region);
+
             string rankKey = "RANK-" + id;
             string similarityKey = "SIMILARITY-" + id;
             string textKey = "TEXT-" + id;
             
-            var rankValue = _redisDb.StringGet(rankKey);
-            var similarityValue = _redisDb.StringGet(similarityKey);
-            var textValue = _redisDb.StringGet(textKey);
+            var rankValue = regionDb.StringGet(rankKey);
+            var similarityValue = regionDb.StringGet(similarityKey);
+            var textValue = regionDb.StringGet(textKey);
 
             if (textValue.HasValue)
                 Text = textValue.ToString();

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Valuator.Hubs;
 using Valuator.Services;
+using Shard;
 
 namespace Valuator;
 
@@ -16,7 +17,11 @@ public class Program
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .Build();
 
-        var redisConnection = config["Redis:ConnectionString"];
+        var dbMain = Environment.GetEnvironmentVariable("DB_MAIN") ?? "localhost:6379";
+        var dbRu = Environment.GetEnvironmentVariable("DB_RU") ?? "localhost:6380";
+        var dbEu = Environment.GetEnvironmentVariable("DB_EU") ?? "localhost:6381";
+        var dbAsia = Environment.GetEnvironmentVariable("DB_ASIA") ?? "localhost:6382";
+
         var rabbitHost = config["RabbitMQ:HostName"];
         var rabbitUser = config["RabbitMQ:UserName"];
         var rabbitPassword = config["RabbitMQ:Password"];
@@ -32,7 +37,11 @@ public class Program
             .SetApplicationName("ValuatorApp");
 
         builder.Services.AddSingleton<IConnectionMultiplexer>(sp => 
-            ConnectionMultiplexer.Connect(redisConnection));
+            ConnectionMultiplexer.Connect(dbMain));
+
+        builder.Services.AddSingleton<IShardRedisService>(sp => 
+            new ShardRedisService(dbRu, dbEu, dbAsia));
+
 
         var factory = new ConnectionFactory
         {

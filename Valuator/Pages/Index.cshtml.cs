@@ -2,25 +2,51 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using RabbitMQ.Client;
 using StackExchange.Redis;
+using Shard;
 
 using System.Text;
 using System.Text.Json;
 
 namespace Valuator.Pages;
 
+public class CountryInfo
+{
+    public string? Name { get; set; }
+    public string? Region { get; set; }
+}
+
 public class IndexModel : PageModel
 {
     private readonly ILogger<IndexModel> _logger;
-    private readonly IDatabase _redisDb;
+    private readonly IDatabase _mainDb;
+    private readonly IShardRedisService _shardedRedis;
     private readonly IConnection _rabbitConnection;
     private const string ExchangeName = "valuator.processing.rank";
     private const string QueueName = "valuator.processing.rank";
     private const string EventsExchangeName = "valuator.events";
 
-    public IndexModel(ILogger<IndexModel> logger, IConnectionMultiplexer redis, IConnection rabbitConnection)
+    public List<CountryInfo> Countries { get; set; } = new()
+    {
+        new CountryInfo { Name = "Russia", Region = "RU" },
+        new CountryInfo { Name = "France", Region = "EU" },
+        new CountryInfo { Name = "Germany", Region = "EU" },
+        new CountryInfo { Name = "UAE", Region = "ASIA" },
+        new CountryInfo { Name = "India", Region = "ASIA" }
+    };
+
+    [BindProperty]
+    public string? SelectedCountry { get; set; }
+
+    public IndexModel(
+        ILogger<IndexModel> logger, 
+        IConnectionMultiplexer mainRedis, 
+        IShardRedisService shardedRedis, 
+        IConnection rabbitConnection
+    )
     {
         _logger = logger;
-        _redisDb = redis.GetDatabase();
+        _mainDb = mainRedis.GetDatabase();
+        _shardedRedis = shardedRedis;
         _rabbitConnection = rabbitConnection;
     }
 
@@ -36,23 +62,32 @@ public class IndexModel : PageModel
 
             string id = Guid.NewGuid().ToString();
 
-            if (string.IsNullOrEmpty(text)) {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(SelectedCountry))
+            {
                 return RedirectToPage();
             }
 
+            string region = _shardedRedis.GetRegionForCountry(SelectedCountry);
+            _logger.LogInformation("Index LOOKUP: {Id}, {Region}", id, region.ToUpper());
+
+            var shardMapKey = $"SHARD-{id}";
+            await _mainDb.StringSetAsync(shardMapKey, region);
+            var regionDb = _shardedRedis.GetDatabaseForRegion(region);
+
             // TODO: (pa1) посчитать similarity и сохранить в БД (Redis) по ключу similarityKey
             string similarityKey = "SIMILARITY-" + id;
-            int similarity = CheckSimilarity(text);
-            _redisDb.StringSet(similarityKey, similarity.ToString());
+            // int similarity = CheckSimilarity(text);
+            int similarity = CheckRegionSimilarity(text, regionDb);
+            regionDb.StringSet(similarityKey, similarity.ToString());
             await PublishSimilarityCalculatedEvent(id, similarity);
 
             // TODO: (pa1) сохранить в БД (Redis) text по ключу textKey
             string textKey = "TEXT-" + id;
-            _redisDb.StringSet(textKey, text);
+            regionDb.StringSet(textKey, text);
 
             // TODO: (pa1) посчитать rank и сохранить в БД (Redis) по ключу rankKey
             string rankKey = "RANK-" + id;
-            _redisDb.StringSet(rankKey, "processing");
+            regionDb.StringSet(rankKey, "processing");
             await SendRankCalculationTask(id, text);      
 
             return Redirect($"summary?id={id}");
@@ -126,12 +161,28 @@ public class IndexModel : PageModel
 
     private int CheckSimilarity(string text)
     {
-        var server = _redisDb.Multiplexer.GetServer("redis", 6379);
+        var allDatabases = _shardedRedis.GetAllRegionalDatabases();
+
+        foreach (var regionDb in allDatabases.Values)
+        {
+            int regionSimilarity = CheckRegionSimilarity(text, regionDb);
+            if (regionSimilarity == 1)
+            {
+                return regionSimilarity;
+            }
+        }
+
+        return 0;
+    }
+
+    private int CheckRegionSimilarity(string text, IDatabase regionDb)
+    {
+        var server = regionDb.Multiplexer.GetServer(regionDb.Multiplexer.GetEndPoints()[0]);
         var keys = server.Keys(pattern: "TEXT-*");
         
         foreach (var key in keys)
         {
-            var storedValue = _redisDb.StringGet(key);
+            var storedValue = regionDb.StringGet(key);
             if (storedValue.HasValue && storedValue.ToString() == text) {
                 return 1;
             }                    

@@ -4,6 +4,7 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using StackExchange.Redis;
 using Microsoft.Extensions.Configuration;
+using Shard;
 
 // TODO: Вынести конфиги, Обработка в consumer если обрыв redis пустой текст
 namespace RankCalculator;
@@ -12,7 +13,7 @@ class Program
 {
     private const string QueueName = "valuator.processing.rank";
     private const string EventsExchangeName = "valuator.events";
-    private static IDatabase? _redis;
+    private static IShardRedisService _shardRedis = null!;
 
     static async Task Main(string[] args)
     {        
@@ -21,18 +22,23 @@ class Program
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .Build();
 
-        var redisConnection = config["Redis:ConnectionString"] ?? throw new InvalidOperationException("RabbitMQ:HostName cannot be null");
+        var dbMain = Environment.GetEnvironmentVariable("DB_MAIN") ?? "localhost:6379";
+        var dbRu = Environment.GetEnvironmentVariable("DB_RU") ?? "localhost:6380";
+        var dbEu = Environment.GetEnvironmentVariable("DB_EU") ?? "localhost:6381";
+        var dbAsia = Environment.GetEnvironmentVariable("DB_ASIA") ?? "localhost:6382";
+
         var rabbitHost = config["RabbitMQ:HostName"] ?? throw new InvalidOperationException("RabbitMQ:HostName cannot be null");
         var rabbitUser = config["RabbitMQ:UserName"] ?? throw new InvalidOperationException("RabbitMQ:HostName cannot be null");
         var rabbitPassword = config["RabbitMQ:Password"] ?? throw new InvalidOperationException("RabbitMQ:HostName cannot be null");
 
         Console.WriteLine("=== Configuration Values ===");
-        Console.WriteLine($"Redis:ConnectionString = '{redisConnection}'");
         Console.WriteLine($"RabbitMQ:HostName = '{rabbitHost}'");
         Console.WriteLine($"RabbitMQ:UserName = '{rabbitUser}'");
         Console.WriteLine($"RabbitMQ:Password = '{rabbitPassword}'");
 
-        _redis = ConnectionMultiplexer.Connect(redisConnection).GetDatabase();
+        var mainDb = ConnectionMultiplexer.Connect(dbMain).GetDatabase();
+        _shardRedis = new ShardRedisService(dbRu, dbEu, dbAsia);
+
         ConnectionFactory factory = new ConnectionFactory
         {
             HostName = rabbitHost,
@@ -45,8 +51,8 @@ class Program
         await using IChannel channel = await connection.CreateChannelAsync();
 
         await DeclareTopologyAsync(channel);
-            
-        await RunConsumer(channel);          
+                 
+        await RunConsumer(channel, mainDb);            
         await Task.Delay(-1);
     }
 
@@ -68,10 +74,10 @@ class Program
             body: messageData);
     }
 
-    private static async Task RunConsumer(IChannel channel)
+    private static async Task RunConsumer(IChannel channel, IDatabase mainDb)
     {
         AsyncEventingBasicConsumer consumer = new(channel);
-        consumer.ReceivedAsync += (_, eventArgs) => ConsumeAsync(channel, eventArgs);
+        consumer.ReceivedAsync += (_, eventArgs) => ConsumeAsync(channel, eventArgs, mainDb);
         
         await channel.BasicConsumeAsync(
             queue: QueueName,
@@ -80,21 +86,27 @@ class Program
         );
     }
 
-    private static async Task ConsumeAsync(IChannel channel, BasicDeliverEventArgs eventArgs)
+    private static async Task ConsumeAsync(IChannel channel, BasicDeliverEventArgs eventArgs, IDatabase mainDb)
     {
         TimeSpan interval = TimeSpan.FromSeconds(new Random().Next(3, 15));
         Console.WriteLine($"Waiting {interval}");
         await Task.Delay(interval);
 
-        if (_redis == null)
+        if (_shardRedis == null)
         {
             await channel.BasicNackAsync(eventArgs.DeliveryTag, false, true);
             return;
         }
 
         string id = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
+
+        string shardMapKey = $"SHARD-{id}";
+        string region = mainDb.StringGet(shardMapKey);
+        Console.WriteLine($"RankCalculator LOOKUP: {id}, {region.ToUpper()}");
+        var regionDb = _shardRedis.GetDatabaseForRegion(region);
+
         string textKey = "TEXT-" + id;
-        RedisValue redisValue = await _redis.StringGetAsync(textKey);
+        RedisValue redisValue = await regionDb.StringGetAsync(textKey);
         string text = redisValue.ToString() ?? "";
 
         if (string.IsNullOrEmpty(text))
@@ -106,7 +118,7 @@ class Program
         double rank = CalculateRank(text);
         string rankKey = "RANK-" + id;
 
-        bool saved = await _redis.StringSetAsync(rankKey, rank.ToString());
+        bool saved = await regionDb.StringSetAsync(rankKey, rank.ToString());
         if (!saved)
         {
             await channel.BasicNackAsync(eventArgs.DeliveryTag, false, true);
